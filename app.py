@@ -2,110 +2,101 @@ import streamlit as st
 import pandas as pd
 from docx import Document
 from io import BytesIO
+import re
 
 # --- הגדרות עיצוב ---
 st.set_page_config(page_title="בודק תעודות - פסגות", page_icon="📑")
 st.markdown("""<style>.main { text-align: right; direction: rtl; }</style>""", unsafe_allow_html=True)
 
 st.title("🍎 בודק תעודות חכם - אורט פסגות")
-st.write("המערכת סורקת את טבלת הציונים לפי העמודות 'ציון' ו-'הערכה מילולית'.")
 
-# --- בנק ההערות המובנה ---
-# (כאן יש להכניס את כל הרשימה המלאה מה-PDF ששלחת)
+# --- בנק ההערות המובנה (מומלץ להעתיק לכאן את כל הרשימה מהקובץ) ---
 POSITIVE_NOTES = [
     "אתה ראוי לשבח על הישגיך המצויינים", "הפגנת ידע והתמודדת עם אתגרים ברמת חשיבה גבוהה",
     "גילית יכולת טובה בניתוח טקסטים ויישום הידע", "הנך בעל ידע עולם נרחב",
     "הישגיך בשפה טובים מאוד - יישר כוח!", "הנך תלמיד מצטיין ויחסך למקצוע רציני",
-    "את ראויה לשבח על הישגיך המצוינים", "את מבינה היטב את הנקרא... ומסיקה מסקנות"
+    "את ראויה לשבח על הישגיך המצוינים", "מגלה אחריות ורצינות בלמידה"
 ]
 
 IMPROVEMENT_NOTES = [
     "עליך לגלות אחריות על למידתך", "עליך לגלות יותר מוטיבציה ואחריות ללמידה",
     "אתה עדיין מתקשה בהבנת החומר", "עליך לשפר את מיומנויות הבנת הנקרא",
-    "את מתקשה בפיתוח נושא ובניסוחו בכתב", "עליך לגלות אחריות על למידתך... ולבצע משימות באופן עקבי"
+    "עליך לגלות אחריות על למידתך... ולבצע משימות באופן עקבי"
 ]
 
-FULL_BANK = POSITIVE_NOTES + IMPROVEMENT_NOTES
+FULL_BANK = [n.replace('\n', ' ').strip() for n in (POSITIVE_NOTES + IMPROVEMENT_NOTES)]
 
-def analyze_row(subject, grade_str, note):
+def clean_text(text):
+    # ניקוי רווחים כפולים, ירידות שורה ותווים מיוחדים לבדיקה מדויקת
+    return re.sub(r'\s+', ' ', str(text)).strip()
+
+def analyze_row(grade_str, note):
     reasons = []
-    note = str(note).strip()
+    cleaned_note = clean_text(note)
     
-    # ניקוי הציון - השארת מספרים בלבד
     grade_digits = "".join(filter(str.isdigit, str(grade_str)))
-    
-    if not grade_digits or not note or len(note) < 3:
+    if not grade_digits or len(cleaned_note) < 3:
         return None 
 
     grade_num = int(grade_digits)
     
-    # 1. בדיקת קיום בבנק
-    if not any(b in note for b in FULL_BANK):
-        reasons.append("הערה חופשית (לא מהבנק)")
+    # בדיקת קיום בבנק (בדיקה גמישה)
+    found = any((cleaned_note in b or b in cleaned_note) for b in FULL_BANK)
+    if not found:
+        reasons.append("הערה חופשית (לא בבנק)")
     
-    # 2. בדיקת סתירה
-    if grade_num <= 55 and any(b in note for b in POSITIVE_NOTES):
+    # בדיקת סתירה
+    if grade_num <= 55 and any((cleaned_note in b or b in cleaned_note) for b in POSITIVE_NOTES):
         reasons.append(f"סתירה: ציון נמוך ({grade_num}) עם הערה חיובית")
-    if grade_num >= 90 and any(b in note for b in IMPROVEMENT_NOTES):
+    if grade_num >= 90 and any((cleaned_note in b or b in cleaned_note) for b in IMPROVEMENT_NOTES):
         reasons.append(f"סתירה: ציון גבוה ({grade_num}) עם הערת שיפור")
         
     return reasons if reasons else None
 
-# --- העלאת קבצים ---
 uploaded_file = st.file_uploader("בחרי קובץ Word (תעודה)", type=['docx'])
 
 if uploaded_file:
-    anomalies = []
     doc = Document(uploaded_file)
-    
+    anomalies = []
+    student_name = "לא נמצא שם"
+
+    # שלב 1: חיפוש שם התלמיד בכל הטקסט של המסמך
+    for para in doc.paragraphs:
+        if "שם" in para.text and ":" in para.text:
+            student_name = para.text.split(":")[-1].strip()
+            break
+
+    # שלב 2: סריקת טבלאות
     for table in doc.tables:
-        # זיהוי עמודות לפי כותרת
-        header_cells = [cell.text.strip() for cell in table.rows[0].cells]
+        header_cells = [clean_text(cell.text) for cell in table.rows[0].cells]
         
         col_grade = -1
         col_note = -1
-        col_subject = 0 # ברירת מחדל עמודה ראשונה
-        
         for i, header in enumerate(header_cells):
             if "ציון" in header: col_grade = i
             if "הערכה מילולית" in header: col_note = i
         
-        # אם לא מצאנו את העמודות המתאימות, דלג על הטבלה הזו
         if col_grade == -1 or col_note == -1:
             continue
             
         for row in table.rows[1:]:
-            cells = [c.text.strip() for c in row.cells]
+            cells = [cell.text.strip() for cell in row.cells]
             if len(cells) > max(col_grade, col_note):
-                subject = cells[col_subject]
+                subject = cells[0]
                 grade = cells[col_grade]
                 note = cells[col_note]
                 
-                res = analyze_row(subject, grade, note)
+                res = analyze_row(grade, note)
                 if res:
                     anomalies.append({
+                        "תלמיד": student_name,
                         "מקצוע": subject,
                         "ציון": grade,
-                        "הערכה": (note[:50] + '...') if len(note) > 50 else note,
                         "חריגה": " | ".join(res)
                     })
 
     if anomalies:
-        st.warning(f"נמצאו {len(anomalies)} חריגות:")
+        st.warning(f"נמצאו חריגות עבור: {student_name}")
         st.table(pd.DataFrame(anomalies))
-        
-        # יצירת WORD להורדה
-        doc_out = Document()
-        doc_out.add_heading('דוח חריגות בתעודה', 0)
-        t = doc_out.add_table(rows=1, cols=4)
-        t.style = 'Table Grid'
-        for i, h in enumerate(['מקצוע', 'ציון', 'הערה', 'חריגה']): t.rows[0].cells[i].text = h
-        for a in anomalies:
-            row_cells = t.add_row().cells
-            row_cells[0].text, row_cells[1].text, row_cells[2].text, row_cells[3].text = str(a['מקצוע']), str(a['ציון']), a['הערה'], a['חריגה']
-        
-        buffer = BytesIO()
-        doc_out.save(buffer)
-        st.download_button("📥 הורדי דוח Word", buffer.getvalue(), "report.docx")
     else:
-        st.success("לא נמצאו חריגות בטבלת הציונים.")
+        st.success(f"התעודה של {student_name} תקינה לחלוטין!")
