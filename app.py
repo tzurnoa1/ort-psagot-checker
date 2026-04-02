@@ -1,102 +1,90 @@
 import streamlit as st
 import pandas as pd
 from docx import Document
+import re
 from io import BytesIO
 
-# עיצוב הממשק
+# --- הגדרות עיצוב ---
 st.set_page_config(page_title="בודק תעודות - פסגות", page_icon="📑")
-st.markdown("""
-    <style>
-    .main { text-align: right; direction: rtl; }
-    div.stButton > button:first-child { background-color: #007bff; color: white; }
-    </style>
-    """, unsafe_allow_html=True)
+st.markdown("""<style>.main { text-align: right; direction: rtl; }</style>""", unsafe_allow_html=True)
 
-st.title("🍎 מערכת בדיקת תעודות - אורט פסגות")
-st.write("העלי קובץ אקסל של ציונים לבדיקת חריגות אוטומטית מול בנק ההערות.")
+st.title("🍎 בודק תעודות - אורט פסגות")
+st.write("ניתן להעלות קובץ אקסל או קובץ וורד של תעודה.")
 
 # --- בנק ההערות המובנה ---
 POSITIVE_NOTES = [
     "אתה ראוי לשבח על הישגיך המצויינים", "הפגנת ידע והתמודדת עם אתגרים ברמת חשיבה גבוהה",
-    "גילית יכולת טובה בניתוח טקסטים ויישום הידע", "הנך בעל ידע עולם נרחב",
-    "הנך מקפיד על נוכחות סדירה, שותף פעיל בשיעורים", "הישגיך בשפה טובים מאוד - יישר כוח!",
-    "אתה מבין היטב את הנקרא, מסוגל להבחין בעיקר", "הנך תלמיד מצטיין ויחסך למקצוע רציני",
-    "גילית ידע וקישרת בין המושגים הנלמדים לאירועים", "הנך סקרן ובעל ידע עולם נרחב",
-    "אתה שולט בניתוח קטעי מקור מילוליים וחזותיים", "אתה מבחין בין עובדות לדעות",
-    "הנך שולט במיומנויוות העבודה עם ספר הלימוד", "לקחת חלק פעיל בשיעורים והגשת את כל המטלות",
-    "עבודתך לסיכום הספר אותו בחרת לקרוא רצינית ומעמיקה", "עבודת המחקר שלך מקורית",
-    "מגלה שליטה מעולה ביישומי המחשב", "הנך נוכח בשיעורים, מבצע את כל הנדרש",
-    "אתה ראוי לשבח על התמדה בביצוע משימותיך", "הנך מגלה מוטיבציה ורצון להתקדם",
-    "שקדת על עבודתך ועבדת ברצינות", "אתה תלמיד רציני, מגלה עניין והבנה",
-    "הנך מגלה אחריות ורצינות בלמידה", "הנך שומר על כללי שיח ודיון",
-    "הנך תלמיד נעים הליכות", "הנך מגלה יחס מכבד כלפי התלמידים"
+    "גילית יכולת טובה בניתוח טקסטים ויישום הידע שנלמד בכיתה", "הנך בעל ידע עולם נרחב",
+    "לקחת חלק פעיל בשיעורים והגשת את כל המטלות בזמן", "הנך תלמיד מצטיין ויחסך למקצוע רציני",
+    "את ראויה לשבח על הישגיך המצוינים", "הפגנת ידע והתמודדת עם אתגרים ברמת חשיבה גבוהה",
+    "את מבינה היטב את הנקרא... ומסיקה מסקנות" # הוסיפי כאן עוד משפטים מהבנק
 ]
 
 IMPROVEMENT_NOTES = [
-    "עליך להקפיד על כתיבת תשובה במבנה תקין", "עליך לשפר את מיומנות העבודה עם ספר הלימוד",
-    "עליך להקפיד על כתיבת תשובה מפורטת ומנומקת", "עליך להקפיד להגיע לשיעורים ולהגיש את המטלות",
-    "אינך עומד בדרישות התלקיט", "עליך לגלות אחריות על למידתך, להגיע בזמן",
-    "עליך להיות נוכח בשיעורים", "למרות הידע הרב ויכולותיך, לא התייחסת ברצינות",
-    "עליך לגלות יותר מוטיבציה ואחריות ללמידה", "אתה עדיין מתקשה בהבנת החומר",
-    "במהלך השיעורים, לא הפגנת רצינות ולא הבעת נכונות ללמידה", "לא שיתפת פעולה ולא גייסת כוחות ללמידה",
-    "התנהגותך בשיעורים וחוסר הריכוז פגעו בהישגיך", "לא השקעת מספיק בעבודות הבית",
-    "עליך לשתף פעולה בעבודה בקבוצות", "עליך לשפר את מיומנויות הבנת הנקרא",
-    "אתה מתקשה בפיתוח נושא ובניסוחו בכתב", "גלה איפוק במהלך השיעורים",
-    "עליך להימנע מפטפוטים", "עליך להימנע מאיחורים", "ציונך נפגע עקב היעדרויותיך"
+    "עליך לגלות אחריות על למידתך", "עליך לגלות יותר מוטיבציה ואחריות ללמידה",
+    "במהלך השיעורים, לא הפגנת רצינות", "אתה מתקשה בפיתוח נושא ובניסוחו בכתב",
+    "עליך לגלות אחריות על למידתך... ולבצע משימות באופן עקבי", "את מתקשה בפיתוח נושא ובניסוחו בכתב"
 ]
 
 FULL_BANK = POSITIVE_NOTES + IMPROVEMENT_NOTES
 
-# העלאת קובץ
-uploaded_file = st.file_uploader("בחרי קובץ (Excel בלבד)", type=['xlsx'])
+def analyze_text(name, subject, grade, note):
+    reasons = []
+    note = str(note).strip()
+    
+    # 1. בדיקת קיום בבנק (בדיקה גמישה למניעת בעיות רווחים)
+    found_in_bank = any(note in b or b in note for b in FULL_BANK)
+    if not found_in_bank:
+        reasons.append("הערה חופשית (לא בבנק)")
+    
+    # 2. בדיקת סתירה (לפי הציון)
+    try:
+        grade_num = int(grade)
+        if grade_num <= 55 and any(note in b or b in note for b in POSITIVE_NOTES):
+            reasons.append(f"סתירה: ציון {grade_num} עם הערה חיובית")
+        if grade_num >= 90 and any(note in b or b in note for b in IMPROVEMENT_NOTES):
+            reasons.append(f"סתירה: ציון {grade_num} עם הערת שיפור")
+    except:
+        pass
+        
+    return reasons
+
+# --- העלאת קבצים ---
+uploaded_file = st.file_uploader("בחרי קובץ (Excel או Word)", type=['xlsx', 'docx'])
 
 if uploaded_file:
-    df = pd.read_excel(uploaded_file)
     anomalies = []
+    
+    # טיפול בקובץ WORD
+    if uploaded_file.name.endswith('.docx'):
+        doc = Document(uploaded_file)
+        # חיפוש נתונים בתוך טבלאות הוורד (שם בד"כ נמצאות התעודות)
+        for table in doc.tables:
+            for row in table.rows[1:]: # מדלג על הכותרת
+                cells = [c.text.strip() for c in row.cells]
+                if len(cells) >= 3: # מוודא שיש לפחות מקצוע, ציון והערה
+                    # כאן המערכת מנסה לנחש איזה תא הוא הציון (מחפשת מספר)
+                    grade = ""
+                    subject = cells[0]
+                    note = cells[-1]
+                    for cell in cells:
+                        if cell.isdigit(): grade = cell
+                    
+                    res = analyze_text("תלמיד", subject, grade, note)
+                    if res:
+                        anomalies.append({"מקצוע": subject, "ציון": grade, "הערה": note, "חריגה": " | ".join(res)})
 
-    for index, row in df.iterrows():
-        reasons = []
-        note = str(row.get('הערה', '')).strip()
-        grade = row.get('ציון', 0)
-        
-        # בדיקה 1: בנק
-        if note not in FULL_BANK:
-            reasons.append("הערה חופשית / לא בבנק")
-        
-        # בדיקה 2: סתירה חיובית
-        if grade <= 55 and note in POSITIVE_NOTES:
-            reasons.append("סתירה: ציון נכשל עם הערה חיובית")
-            
-        # בדיקה 3: סתירה שלילית
-        if grade >= 90 and note in IMPROVEMENT_NOTES:
-            reasons.append("סתירה: ציון מצוין עם הערת לשיפור")
-
-        if reasons:
-            anomalies.append({
-                "תלמיד/ה": row.get('שם', 'לא ידוע'),
-                "מקצוע": row.get('מקצוע', 'לא ידוע'),
-                "ציון": grade,
-                "סיבת החריגה": " | ".join(reasons)
-            })
-
-    if anomalies:
-        st.warning(f"נמצאו {len(anomalies)} חריגות:")
-        res_df = pd.DataFrame(anomalies)
-        st.table(res_df)
-
-        # יצירת WORD
-        doc = Document()
-        doc.add_heading('דוח חריגות בתעודות', 0)
-        table = doc.add_table(rows=1, cols=4)
-        table.style = 'Table Grid'
-        headers = ['שם', 'מקצוע', 'ציון', 'תיאור']
-        for i, h in enumerate(headers): table.rows[0].cells[i].text = h
-        for a in anomalies:
-            cells = table.add_row().cells
-            cells[0].text, cells[1].text, cells[2].text, cells[3].text = str(a['תלמיד/ה']), str(a['מקצוע']), str(a['ציון']), a['סיבת החריגה']
-
-        buffer = BytesIO()
-        doc.save(buffer)
-        st.download_button("📥 הורדי דוח Word סופי", buffer.getvalue(), "report.docx")
+    # טיפול בקובץ EXCEL
     else:
-        st.success("מעולה! כל התעודות עומדות בתקן.")
+        df = pd.read_excel(uploaded_file)
+        for _, row in df.iterrows():
+            res = analyze_text(row.get('שם',''), row.get('מקצוע',''), row.get('ציון',0), row.get('הערה',''))
+            if res:
+                anomalies.append({"מקצוע": row.get('מקצוע',''), "ציון": row.get('ציון',0), "הערה": row.get('הערה',''), "חריגה": " | ".join(res)})
+
+    # --- פלט ---
+    if anomalies:
+        st.error(f"נמצאו {len(anomalies)} חריגות:")
+        st.table(pd.DataFrame(anomalies))
+    else:
+        st.success("הבדיקה הסתיימה - לא נמצאו חריגות!")
