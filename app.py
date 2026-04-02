@@ -5,91 +5,91 @@ import re
 
 # --- הגדרות עיצוב ---
 st.set_page_config(page_title="בודק תעודות - פסגות", page_icon="🍎", layout="wide")
-st.markdown("""<style>.main { text-align: right; direction: rtl; } div.stButton > button { width: 100%; }</style>""", unsafe_allow_html=True)
+st.markdown("""<style>.main { text-align: right; direction: rtl; } </style>""", unsafe_allow_html=True)
 
-st.title("🍎 בודק תעודות פסגות - גרסה מתוקנת")
+st.title("🍎 מערכת בדיקה - אורט פסגות")
 
-# --- בנק שורשים (לעקיפת בעיות מגדר) ---
+# --- בנק שורשים (מעודכן לפי התמונה שלך) ---
 BANK_ROOTS = [
-    "ראוי לשבח", "הישגיך המצוי", "הפגנת ידע", "אתגרים", "ניתוח טקסט", 
-    "ידע עולם", "הנך תלמיד", "מצטיין", "רצינות", "אחריות", "התקדמות",
-    "ביצוע משימות", "השתתפות", "ניסוח", "הבנת הנקרא", "מגלה עניין",
-    "השקעה", "מוטיבציה", "עקביות", "שיפור", "למידה", "הישגים"
+    "ראויה לשבח", "הישגיך", "הפגנת ידע", "ניתוח טקסט", "תלמיד", "מצטיין", 
+    "רצינות", "אחריות", "התקדמות", "ביצוע משימות", "הבנת הנקרא", 
+    "מגלה מוטיבציה", "ורצון להתקדם", "שקדת על עבודתך", "השתתפות פעילה"
 ]
 
-def is_note_in_bank(note):
-    clean_n = str(note).replace('.', '').strip()
-    if len(clean_n) < 4: return True
-    return any(root in clean_n for root in BANK_ROOTS)
+def clean_name(text):
+    """מחלץ את השם בלבד מתוך השורה העלונה"""
+    # מסיר את כל מה שמהמילה 'מס' זהות והלאה
+    text = text.split("מס'")[0]
+    # מסיר את כותרת השדה
+    text = re.sub(r'שם התלמיד/ה:', '', text)
+    return text.strip()
 
-def clean_student_name(name_text):
-    # ניקוי אגרסיבי של תווים ומילים מיותרות
-    name_text = re.sub(r'(מס|זהות|ת\.ז|כתה|כיתה|תלמיד|שם|לכבוד)', '', name_text)
-    name_text = re.sub(r'[:\-\d\.]', '', name_text)
-    return name_text.strip()
+def analyze_row(grade_str, note):
+    reasons = []
+    # בדיקת בנק (חיפוש שורש אחד לפחות)
+    is_in_bank = any(root in note for root in BANK_ROOTS)
+    if not is_in_bank:
+        reasons.append("הערה חופשית")
+    
+    # בדיקת סתירה (לפי התמונה: ציון 45 עם הערת מוטיבציה/אחריות)
+    try:
+        grade_num = int("".join(filter(str.isdigit, str(grade_str))))
+        if grade_num < 50 and "ראויה לשבח" in note:
+            reasons.append(f"סתירה: ציון {grade_num} עם 'ראויה לשבח'")
+    except:
+        pass
+    return reasons
 
-uploaded_file = st.file_uploader("העלי קובץ תעודה (Word)", type=['docx'])
+uploaded_file = st.file_uploader("העלי את קובץ התעודה", type=['docx'])
 
 if uploaded_file:
     doc = Document(uploaded_file)
-    all_data = []
+    all_text = "\n".join([p.text for p in doc.paragraphs])
     
-    # חילוץ שם התלמיד
-    full_text = " ".join([p.text for p in doc.paragraphs])
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells: full_text += " " + cell.text
-            
-    name_search = re.search(r"(שם|לכבוד)\s*[:/-]\s*([א-ת\s]+)", full_text)
-    current_student = clean_student_name(name_search.group(2)) if name_search else "תלמיד/ה"
+    # 1. חילוץ שם התלמיד לפי התבנית שבתמונה
+    student_name = "לא נמצא שם"
+    if "שם התלמיד/ה:" in all_text:
+        line = [l for l in all_text.split('\n') if "שם התלמיד/ה:" in l][0]
+        student_name = clean_name(line)
 
+    data = []
     for table in doc.tables:
-        header_cells = [cell.text.strip() for cell in table.rows[0].cells]
-        col_grade, col_note = -1, -1
+        # זיהוי עמודות לפי התמונה
+        headers = [c.text.strip() for c in table.rows[0].cells]
+        col_grade, col_note, col_sub = -1, -1, -1
         
-        for i, h in enumerate(header_cells):
+        for i, h in enumerate(headers):
             if "ציון" in h: col_grade = i
-            if "מילולית" in h or "הערכה" in h: col_note = i
-        
-        if col_grade == -1 or col_note == -1: continue
+            if "הערכה מילולית" in h: col_note = i
+            if "מקצוע" in h: col_sub = i
             
+        if col_grade == -1 or col_note == -1: continue
+
         for row in table.rows[1:]:
             cells = [c.text.strip() for c in row.cells]
             if len(cells) > max(col_grade, col_note):
-                subject = cells[0]
+                sub = cells[col_sub] if col_sub != -1 else "כללי"
                 grade = cells[col_grade]
                 note = cells[col_note]
                 
-                is_free = not is_note_in_bank(note)
-                is_contradict = False
-                grade_num = "".join(filter(str.isdigit, grade))
-                if grade_num and int(grade_num) <= 55:
-                    if any(w in note for w in ["מצוין", "שבח", "טוב מאד", "הצלחה"]):
-                        is_contradict = True
+                if not grade and not note: continue
                 
-                if subject and (grade or note):
-                    all_data.append({
-                        "תלמיד": current_student,
-                        "מקצוע": subject,
-                        "ציון": grade,
-                        "הערכה מילולית": note,
-                        "הערה חופשית?": "⚠️ כן" if is_free else "✅ בנק",
-                        "סתירה?": "❌ סתירה!" if is_contradict else "✅ תקין"
-                    })
+                errors = analyze_row(grade, note)
+                data.append({
+                    "תלמיד": student_name,
+                    "מקצוע": sub,
+                    "ציון": grade,
+                    "הערכה מילולית": note[:60] + "...",
+                    "חריגות": " | ".join(errors) if errors else "✅ תקין"
+                })
 
-    if all_data:
-        df = pd.DataFrame(all_data)
-        st.subheader(f"סיכום בדיקה עבור: {current_student}")
+    if data:
+        df = pd.DataFrame(data)
+        st.subheader(f"דו\"ח בדיקה: {student_name}")
         
-        # התיקון לשגיאה: שימוש ב-map במקום applymap
-        def style_rows(v):
-            if "⚠️" in str(v) or "❌" in str(v):
-                return 'background-color: #ffcccc'
-            return ''
-
-        st.table(df.style.map(style_rows, subset=['הערה חופשית?', 'סתירה?']))
+        def color_errors(val):
+            return 'background-color: #ffcccc' if "✅" not in str(val) else ''
         
-        csv = df.to_csv(index=False).encode('utf-8-sig')
-        st.download_button("📥 הורדי את תוצאות הבדיקה", csv, "check_results.csv", "text/csv")
+        st.table(df.style.map(color_errors, subset=['חריגות']))
     else:
-        st.info("לא נמצאה טבלת ציונים מתאימה.")
+        st.error("לא הצלחתי לקרוא את הטבלה. ודאי שהכותרות הן 'ציון' ו-'הערכה מילולית'.")
