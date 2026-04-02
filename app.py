@@ -100,4 +100,10 @@ if uploaded_file:
     if all_results:
         df = pd.DataFrame(all_results)
         # תצוגה
-        st.dataframe(df
+        st.dataframe(df.style.apply(lambda r: ['background-color: #ffcccc' if "❌" in str(r['סטטוס']) else '' for _ in r], axis=1), use_container_width=True)
+        
+        # אפשרות להורדה
+        csv = df.to_csv(index=False, encoding='utf-16')
+        st.download_button("📥 הורדת הדו\"ח המלא (Excel/CSV)", csv, "report.csv", "text/csv")
+    else:
+        st.error("לא נמצאו טבלאות ציונים במסמך.")
