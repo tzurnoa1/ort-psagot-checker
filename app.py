@@ -3,93 +3,94 @@ import pandas as pd
 from docx import Document
 import re
 
-# --- הגדרות עיצוב ---
+# --- עיצוב ---
 st.set_page_config(page_title="בודק תעודות - פסגות", page_icon="🍎", layout="wide")
-st.markdown("""<style>.main { text-align: right; direction: rtl; } </style>""", unsafe_allow_html=True)
+st.markdown("""<style>.main { text-align: right; direction: rtl; }</style>""", unsafe_allow_html=True)
 
-st.title("🍎 מערכת בדיקה - אורט פסגות")
+st.title("🍎 בודק תעודות - גרסה קשוחה")
 
-# --- בנק שורשים (מעודכן לפי התמונה שלך) ---
-BANK_ROOTS = [
-    "ראויה לשבח", "הישגיך", "הפגנת ידע", "ניתוח טקסט", "תלמיד", "מצטיין", 
-    "רצינות", "אחריות", "התקדמות", "ביצוע משימות", "הבנת הנקרא", 
-    "מגלה מוטיבציה", "ורצון להתקדם", "שקדת על עבודתך", "השתתפות פעילה"
-]
+# מילים שנחשבות "חיוביות" ויוצרות סתירה עם ציון נמוך
+POSITIVE_WORDS = ["מוטיבציה", "רצון", "שבח", "מצוין", "טוב", "נאה", "רהוט", "משתתף", "פעיל"]
 
-def clean_name(text):
-    """מחלץ את השם בלבד מתוך השורה העלונה"""
-    # מסיר את כל מה שמהמילה 'מס' זהות והלאה
-    text = text.split("מס'")[0]
-    # מסיר את כותרת השדה
-    text = re.sub(r'שם התלמיד/ה:', '', text)
+def clean_student_name(text):
+    # מנקה את כל מה שמסביב לשם
+    text = text.replace("שם התלמיד/ה:", "").replace("שם התלמיד:", "").replace("שם:", "")
+    text = text.split("מס'")[0] # חותך כשמגיע למספר זהות
     return text.strip()
 
-def analyze_row(grade_str, note):
+def analyze_logic(grade_str, note):
     reasons = []
-    # בדיקת בנק (חיפוש שורש אחד לפחות)
-    is_in_bank = any(root in note for root in BANK_ROOTS)
-    if not is_in_bank:
-        reasons.append("הערה חופשית")
-    
-    # בדיקת סתירה (לפי התמונה: ציון 45 עם הערת מוטיבציה/אחריות)
     try:
+        # חילוץ מספר הציון
         grade_num = int("".join(filter(str.isdigit, str(grade_str))))
-        if grade_num < 50 and "ראויה לשבח" in note:
-            reasons.append(f"סתירה: ציון {grade_num} עם 'ראויה לשבח'")
+        
+        # חוק סתירה: ציון נכשל עם הערה שנראית חיובית
+        if grade_num < 55:
+            for word in POSITIVE_WORDS:
+                if word in note:
+                    reasons.append(f"❓ סתירה: ציון {grade_num} (נכשל) עם הערת שבח/רצון")
+                    break
     except:
         pass
     return reasons
 
-uploaded_file = st.file_uploader("העלי את קובץ התעודה", type=['docx'])
+uploaded_file = st.file_uploader("העלי קובץ תעודה", type=['docx'])
 
 if uploaded_file:
     doc = Document(uploaded_file)
-    all_text = "\n".join([p.text for p in doc.paragraphs])
     
-    # 1. חילוץ שם התלמיד לפי התבנית שבתמונה
+    # חיפוש שם התלמיד בכל המסמך (פסקאות וטבלאות)
     student_name = "לא נמצא שם"
-    if "שם התלמיד/ה:" in all_text:
-        line = [l for l in all_text.split('\n') if "שם התלמיד/ה:" in l][0]
-        student_name = clean_name(line)
+    all_content = []
+    
+    # סריקת כל הטקסט האפשרי
+    for p in doc.paragraphs: all_content.append(p.text)
+    for t in doc.tables:
+        for r in t.rows:
+            for c in r.cells: all_content.append(c.text)
+            
+    for line in all_content:
+        if "שם התלמיד" in line:
+            student_name = clean_student_name(line)
+            break
 
     data = []
     for table in doc.tables:
-        # זיהוי עמודות לפי התמונה
+        # בדיקה אם זו טבלת הציונים
         headers = [c.text.strip() for c in table.rows[0].cells]
-        col_grade, col_note, col_sub = -1, -1, -1
+        if not any("ציון" in h for h in headers): continue
         
-        for i, h in enumerate(headers):
-            if "ציון" in h: col_grade = i
-            if "הערכה מילולית" in h: col_note = i
-            if "מקצוע" in h: col_sub = i
-            
-        if col_grade == -1 or col_note == -1: continue
+        col_grade = next(i for i, h in enumerate(headers) if "ציון" in h)
+        col_note = next(i for i, h in enumerate(headers) if "הערכה מילולית" in h)
+        col_sub = next((i for i, h in enumerate(headers) if "מקצוע" in h), 0)
 
         for row in table.rows[1:]:
             cells = [c.text.strip() for c in row.cells]
             if len(cells) > max(col_grade, col_note):
-                sub = cells[col_sub] if col_sub != -1 else "כללי"
+                sub = cells[col_sub]
                 grade = cells[col_grade]
                 note = cells[col_note]
                 
                 if not grade and not note: continue
                 
-                errors = analyze_row(grade, note)
+                logic_errors = analyze_logic(grade, note)
                 data.append({
                     "תלמיד": student_name,
                     "מקצוע": sub,
                     "ציון": grade,
-                    "הערכה מילולית": note[:60] + "...",
-                    "חריגות": " | ".join(errors) if errors else "✅ תקין"
+                    "הערכה מילולית": note,
+                    "סטטוס": "❌ חריגה" if logic_errors else "✅ תקין",
+                    "פירוט": " | ".join(logic_errors) if logic_errors else ""
                 })
 
     if data:
         df = pd.DataFrame(data)
-        st.subheader(f"דו\"ח בדיקה: {student_name}")
+        st.subheader(f"בדיקה עבור: {student_name}")
         
-        def color_errors(val):
-            return 'background-color: #ffcccc' if "✅" not in str(val) else ''
+        # צביעת שורות עם חריגות
+        def highlight(row):
+            return ['background-color: #ffcccc' if row['סטטוס'] == "❌ חריגה" else '' for _ in row]
         
-        st.table(df.style.map(color_errors, subset=['חריגות']))
+        st.table(df.style.apply(highlight, axis=1))
     else:
-        st.error("לא הצלחתי לקרוא את הטבלה. ודאי שהכותרות הן 'ציון' ו-'הערכה מילולית'.")
+        st.info("לא נמצאה טבלת ציונים.")
