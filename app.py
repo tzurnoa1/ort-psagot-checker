@@ -7,9 +7,9 @@ import re
 st.set_page_config(page_title="בודק תעודות - אורט פסגות", page_icon="🍎", layout="wide")
 st.markdown("""<style>.main { text-align: right; direction: rtl; }</style>""", unsafe_allow_html=True)
 
-st.title("🍎 בודק תעודות - בנק משפטים מעודכן (40-45)")
+st.title("🍎 בודק תעודות - פתרון סופי לזיהוי שם")
 
-# --- רשימת המשפטים המשותפת לציון 40 ו-45 ---
+# --- בנק המשפטים (40-45) ---
 LOW_GRADE_SENTENCES = [
     "עליך לגלות יותר מוטיבציה ואחריות ללמידה.",
     "עליך לגלות אחריות על למידתך, להגיע בזמן לשיעורים ולבצע משימות באופן עקבי.",
@@ -22,80 +22,58 @@ LOW_GRADE_SENTENCES = [
     "למידה עקבית, השקעת מאמצים והתמקדות בחומר הלימוד ישפרו את ידיעותייך ויקדמו אותך להישגים טובים במקצוע."
 ]
 
-# --- בנק ההערות המלא ---
-GRADE_BANK = {
-    40: LOW_GRADE_SENTENCES,
-    45: LOW_GRADE_SENTENCES,
-    # כאן תוכלי להמשיך להוסיף לשאר הציונים
-    95: [
-        "את ראויה לשבח על הישגייך המצוינים",
-        "יכולתך להתבטא בכתב ראויה לשבח"
-    ]
-}
+GRADE_BANK = {40: LOW_GRADE_SENTENCES, 45: LOW_GRADE_SENTENCES}
 
 def normalize_hebrew(text):
-    """מנקה הטיות מגדריות בסיסיות להשוואה חכמה"""
     if not text: return ""
-    text = str(text).strip()
-    # החלפת סיומות נפוצות בנקבה לצורה בסיסית
-    text = text.replace("ייך", "ך").replace("יך", "ך")
-    text = text.replace("הינך", "הנך")
-    text = text.replace("עליך", "עלך").replace("עלייך", "עלך")
-    text = text.replace("שייך", "שך")
-    return text
+    t = str(text).strip()
+    t = t.replace("ייך", "ך").replace("יך", "ך").replace("הינך", "הנך")
+    t = t.replace("עליך", "עלך").replace("עלייך", "עלך")
+    return t
 
-def check_grade_match(grade_str, note):
-    try:
-        nums = re.findall(r'\d+', str(grade_str))
-        if not nums: return None
-        grade_num = int(nums[0])
-        rounded_grade = 5 * round(grade_num / 5)
-        
-        note_norm = normalize_hebrew(note)
-
-        if rounded_grade in GRADE_BANK:
-            # בדיקה אם המשפט קיים בבנק של הציון הנוכחי
-            for allowed in GRADE_BANK[rounded_grade]:
-                if normalize_hebrew(allowed) in note_norm or note_norm in normalize_hebrew(allowed):
-                    return None # תקין
-            
-            # בדיקה אם המשפט שייך לציון גבוה משמעותית (סתירה)
-            for other_grade, notes in GRADE_BANK.items():
-                for n in notes:
-                    if normalize_hebrew(n) in note_norm:
-                        if other_grade > rounded_grade + 10:
-                            return f"❌ סתירה: ציון {grade_num} עם הערה שמתאימה לציון {other_grade}"
-            
-            return "📝 הערה חופשית (לא מהבנק המוגדר לציון זה)"
-    except:
-        pass
-    return None
-
-def find_student_name(doc):
-    # חיפוש "רדאר" מקיף לשם התלמיד
-    search_areas = []
-    for p in doc.paragraphs: search_areas.append(p.text)
-    for s in doc.sections:
-        for p in s.header.paragraphs: search_areas.append(p.text)
+def find_student_name_final(doc):
+    """סורק כל פיסת טקסט אפשרית במסמך"""
+    full_text_list = []
+    
+    # 1. פסקאות רגילות
+    for p in doc.paragraphs: full_text_list.append(p.text)
+    
+    # 2. טבלאות
     for t in doc.tables:
         for r in t.rows:
-            for c in r.cells: search_areas.append(c.text)
+            for c in r.cells: full_text_list.append(c.text)
             
-    for text in search_areas:
-        if "שם התלמיד" in text or "לכבוד" in text:
-            # מחפש שם בעברית אחרי מילת מפתח
-            match = re.search(r"(שם התלמיד/ה?|לכבוד)\s*[:/-]?\s*([א-ת\s]+)", text)
-            if match:
-                name = match.group(2).split("מס'")[0].split("ת.ז")[0].strip()
-                if len(name.split()) >= 2: # מוודא שיש לפחות שם פרטי ומשפחה
-                    return name
-    return "לא נמצא שם"
+    # 3. כותרות עליונות ותחתונות
+    for section in doc.sections:
+        for p in section.header.paragraphs: full_text_list.append(p.text)
+        for p in section.footer.paragraphs: full_text_list.append(p.text)
+
+    # 4. חיפוש בתוך "אלמנטים צפים" (תיבות טקסט) דרך ה-XML של המסמך
+    import xml.etree.ElementTree as ET
+    namespace = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    root = ET.fromstring(doc._element.xml)
+    for t in root.findall('.//w:t', namespace):
+        full_text_list.append(t.text)
+
+    # שלב הניתוח: חיפוש תבנית של שם
+    for line in full_text_list:
+        if not line: continue
+        # מחפש "שם התלמיד" או "שם התלמידה" או רק "שם:"
+        if any(keyword in line for keyword in ["שם התלמיד", "שם התלמידה", "שם:", "לכבוד"]):
+            # ניקוי השורה: משאיר רק אותיות בעברית ורווחים
+            clean = re.sub(r'(שם התלמיד/ה:|שם התלמיד:|שם התלמידה:|שם:|לכבוד|מס\' זהות:.*|ת\.ז:.*|כיתה:.*)', '', line)
+            clean = re.sub(r'[^א-ת\s]', '', clean).strip()
+            # אם נשאר טקסט שהוא לפחות שתי מילים (שם פרטי ומשפחה)
+            if len(clean.split()) >= 2:
+                return clean
+                
+    return "לא נמצא שם (בדקי אם השם הוא תמונה)"
 
 uploaded_file = st.file_uploader("העלי קובץ תעודה (Word)", type=['docx'])
 
 if uploaded_file:
     doc = Document(uploaded_file)
-    student_name = find_student_name(doc)
+    student_name = find_student_name_final(doc)
     
     all_results = []
     for table in doc.tables:
@@ -113,19 +91,31 @@ if uploaded_file:
                 sub, grade, note = cells[col_sub], cells[col_grade], cells[col_note]
                 if not (grade or note): continue
                 
-                error = check_grade_match(grade, note)
+                # בדיקת לוגיקה
+                nums = re.findall(r'\d+', str(grade))
+                grade_num = int(nums[0]) if nums else 0
+                error = None
+                
+                note_norm = normalize_hebrew(note)
+                is_match = False
+                if grade_num in GRADE_BANK:
+                    for allowed in GRADE_BANK[grade_num]:
+                        if normalize_hebrew(allowed) in note_norm:
+                            is_match = True
+                            break
+                    if not is_match:
+                        error = "📝 הערה חופשית"
+                
                 all_results.append({
                     "תלמיד": student_name,
                     "מקצוע": sub,
                     "ציון": grade,
                     "הערכה מילולית": note,
-                    "סטטוס": "✅ תקין" if not error else "❌ חריגה",
-                    "פירוט": error if error else "התאמה לבנק המאושר"
+                    "סטטוס": "✅ תקין" if not error else "❌ בדיקה",
+                    "פירוט": error if error else "תקין לפי הבנק"
                 })
 
     if all_results:
         df = pd.DataFrame(all_results)
         st.subheader(f"דו\"ח בדיקה עבור: {student_name}")
         st.table(df.style.apply(lambda r: ['background-color: #ffcccc' if "❌" in str(r['סטטוס']) else '' for _ in r], axis=1))
-    else:
-        st.error("לא נמצאו נתונים תקינים לסריקה.")
