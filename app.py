@@ -5,9 +5,9 @@ import re
 
 # --- עיצוב ---
 st.set_page_config(page_title="בודק תעודות - אורט פסגות", page_icon="🍎", layout="wide")
-st.markdown("""<style>.main { text-align: right; direction: rtl; border-radius: 10px; }</style>""", unsafe_allow_html=True)
+st.markdown("""<style>.main { text-align: right; direction: rtl; }</style>""", unsafe_allow_html=True)
 
-st.title("🍎 בודק תעודות - דוח ריבוי תלמידים")
+st.title("🍎 בודק תעודות - זיהוי לפי מיקום (שם מעל טבלה)")
 
 # --- בנק משפטים 40-45 ---
 LOW_GRADE_SENTENCES = [
@@ -30,80 +30,77 @@ def normalize_hebrew(text):
     t = t.replace("עליך", "עלך").replace("עלייך", "עלך")
     return t
 
-def extract_name(text):
-    """מחלץ שם מתוך שורה נתונה"""
-    if any(k in text for k in ["שם התלמיד", "שם התלמידה", "שם:", "לכבוד"]):
-        clean = re.sub(r'(שם התלמיד/ה:|שם התלמיד:|שם התלמידה:|שם:|לכבוד|מס\' זהות:.*|ת\.ז:.*|כיתה:.*)', '', text)
-        clean = re.sub(r'[^א-ת\s]', '', clean).strip()
-        if len(clean.split()) >= 2:
-            return clean
-    return None
-
 uploaded_file = st.file_uploader("העלי קובץ תעודות (Word)", type=['docx'])
 
 if uploaded_file:
     doc = Document(uploaded_file)
     all_results = []
-    current_student = "לא זוהה שם"
+    
+    # עוברים על כל הטבלאות במסמך
+    for i, table in enumerate(doc.tables):
+        # זיהוי אם זו טבלת ציונים
+        if len(table.rows) < 2: continue
+        headers = [c.text.strip() for c in table.rows[0].cells]
+        col_grade = next((idx for idx, h in enumerate(headers) if "ציון" in h), -1)
+        col_note = next((idx for idx, h in enumerate(headers) if "הערכה" in h or "מילולית" in h), -1)
+        col_sub = next((idx for idx, h in enumerate(headers) if "מקצוע" in h), 0)
+        
+        if col_grade == -1 or col_note == -1: continue
 
-    # אנחנו עוברים על כל האלמנטים במסמך לפי הסדר שלהם
-    for element in doc.element.body:
-        # אם זה פסקה - נבדוק אם יש בה שם חדש
-        if element.tag.endswith('p'):
-            para_text = "".join(t.text for t in element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t'))
-            found_name = extract_name(para_text)
-            if found_name:
-                current_student = found_name
+        # --- חיפוש השם מעל הטבלה ---
+        # אנחנו מחפשים ב-5 הפסקאות שקדמו לטבלה הזו
+        current_student = "לא זוהה שם"
+        
+        # מחפשים את המיקום של הטבלה בתוך גוף המסמך
+        tbl_element = table._element
+        parent = tbl_element.getparent()
+        elements = list(parent)
+        tbl_index = elements.index(tbl_element)
+        
+        # סורקים אחורה מהטבלה למעלה
+        for j in range(tbl_index - 1, max(-1, tbl_index - 6), -1):
+            prev_element = elements[j]
+            # אם מצאנו פסקה (p)
+            if prev_element.tag.endswith('p'):
+                para_text = "".join(node.text for node in prev_element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t'))
+                if para_text.strip():
+                    # ניקוי השם
+                    name = re.sub(r'(שם התלמיד/ה:|שם התלמיד:|שם התלמידה:|שם:|לכבוד|מס\' זהות:.*|ת\.ז:.*|כיתה:.*)', '', para_text)
+                    name = re.sub(r'[^א-ת\s]', '', name).strip()
+                    if len(name.split()) >= 2:
+                        current_student = name
+                        break
 
-        # אם זו טבלה - נסרוק אותה ונשייך לסטודנט הנוכחי
-        elif element.tag.endswith('tbl'):
-            # מוצאים את הטבלה האמיתית בתוך האובייקט של doc
-            # (דרך קצת טכנית אבל הכרחית כדי לשמור על סדר התלמידים)
-            from docx.table import Table
-            table = Table(element, doc)
-            
-            if len(table.rows) < 2: continue
-            
-            headers = [c.text.strip() for c in table.rows[0].cells]
-            col_grade = next((i for i, h in enumerate(headers) if "ציון" in h), -1)
-            col_note = next((i for i, h in enumerate(headers) if "הערכה" in h or "מילולית" in h), -1)
-            col_sub = next((i for i, h in enumerate(headers) if "מקצוע" in h), 0)
-            
-            if col_grade == -1 or col_note == -1: continue
-
-            for row in table.rows[1:]:
-                cells = [c.text.strip() for c in row.cells]
-                if len(cells) > max(col_grade, col_note):
-                    sub, grade, note = cells[col_sub], cells[col_grade], cells[col_note]
-                    if not (grade or note): continue
-                    
-                    # בדיקת לוגיקה
-                    nums = re.findall(r'\d+', str(grade))
-                    grade_num = int(nums[0]) if nums else 0
-                    error = None
-                    
-                    if grade_num in GRADE_BANK:
-                        note_norm = normalize_hebrew(note)
-                        is_match = any(normalize_hebrew(allowed) in note_norm for allowed in GRADE_BANK[grade_num])
-                        if not is_match:
-                            error = "📝 הערה חופשית"
-
-                    all_results.append({
-                        "שם התלמיד/ה": current_student,
-                        "מקצוע": sub,
-                        "ציון": grade,
-                        "הערכה מילולית": note,
-                        "סטטוס": "✅ תקין" if not error else "❌ בדיקה",
-                        "פירוט": error if error else "תקין לפי הבנק"
-                    })
+        # --- עיבוד נתוני הטבלה ---
+        for row in table.rows[1:]:
+            cells = [c.text.strip() for c in row.cells]
+            if len(cells) > max(col_grade, col_note):
+                sub, grade, note = cells[col_sub], cells[col_grade], cells[col_note]
+                if not (grade or note): continue
+                
+                # בדיקת התאמה לבנק
+                nums = re.findall(r'\d+', str(grade))
+                grade_num = int(nums[0]) if nums else 0
+                error = None
+                
+                if grade_num in GRADE_BANK:
+                    note_norm = normalize_hebrew(note)
+                    is_match = any(normalize_hebrew(allowed) in note_norm for allowed in GRADE_BANK[grade_num])
+                    if not is_match:
+                        error = "📝 הערה חופשית"
+                
+                all_results.append({
+                    "תלמיד/ה": current_student,
+                    "מקצוע": sub,
+                    "ציון": grade,
+                    "הערכה מילולית": note,
+                    "סטטוס": "✅ תקין" if not error else "❌ בדיקה",
+                    "פירוט": error if error else "תקין"
+                })
 
     if all_results:
         df = pd.DataFrame(all_results)
-        # תצוגה
-        st.dataframe(df.style.apply(lambda r: ['background-color: #ffcccc' if "❌" in str(r['סטטוס']) else '' for _ in r], axis=1), use_container_width=True)
-        
-        # אפשרות להורדה
-        csv = df.to_csv(index=False, encoding='utf-16')
-        st.download_button("📥 הורדת הדו\"ח המלא (Excel/CSV)", csv, "report.csv", "text/csv")
+        st.table(df)
+        st.download_button("📥 הורדת הדו\"ח", df.to_csv(index=False, encoding='utf-16'), "report.csv", "text/csv")
     else:
-        st.error("לא נמצאו טבלאות ציונים במסמך.")
+        st.warning("לא נמצאו טבלאות ציונים. ודאי שיש עמודה בשם 'ציון'.")
