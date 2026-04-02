@@ -3,103 +3,114 @@ import pandas as pd
 from docx import Document
 import re
 
-# --- עיצוב ---
-st.set_page_config(page_title="בודק תעודות - פסגות", page_icon="🍎", layout="wide")
+# --- הגדרות עיצוב ---
+st.set_page_config(page_title="בודק תעודות - אורט פסגות", page_icon="🍎", layout="wide")
 st.markdown("""<style>.main { text-align: right; direction: rtl; }</style>""", unsafe_allow_html=True)
 
-st.title("🍎 בודק תעודות - גרסה יציבה")
+st.title("🍎 בדיקה חכמה לפי ציון מדויק (40-100)")
 
-# מילים חיוביות לבדיקת סתירה
-POSITIVE_WORDS = ["מוטיבציה", "רצון", "שבח", "מצוין", "טוב", "נאה", "רהוט", "משתתף", "פעיל", "התקדמות"]
+# --- בנק ההערות המלא לפי ציונים (עדכני כאן את המשפטים מהאקסל שלך) ---
+# המפתח הוא הציון, והערך הוא רשימת המשפטים המותרים לאותו ציון
+GRADE_BANK = {
+    40: ["למידה עקבית, השקעת מאמצים והתמקדות בחומר הלימוד ישפרו את ידיעותייך"],
+    45: ["עליך לגלות אחריות על למידתך, להגיע בזמן לשיעורים ולבצע משימות"],
+    50: ["הנך מגלה מוטיבציה ורצון להתקדם בלימודים"],
+    55: ["ניכר כי הינך משקיעה מאמצים בלימודייך"],
+    60: ["הישגייך בתחום זה דורשים השקעה נוספת"],
+    65: ["הנך בנתיב הנכון, המשך התמדה תביא לשיפור"],
+    70: ["הישגייך טובים, מומלץ להעמיק בחומר"],
+    75: ["שקדת על עבודתך ברצינות, מתוך אחריות ובגרות"],
+    80: ["הנך משתתפת באופן פעיל ומגלה עניין"],
+    85: ["הישגייך טובים מאוד, יישר כוח"],
+    90: ["ראויה לשבח על הישגייך המצוינים", "כתיבתך רהוטה ועניינית"],
+    95: ["הישגייך מעולים, את מפגינה ידע רב"],
+    100: ["הצטיינות יתרה, כל הכבוד על ההשקעה והידע"]
+}
 
-def clean_student_name(text):
-    # ניקוי השם מסימנים ומספרי זהות
-    text = re.sub(r'(שם התלמיד/ה:|שם התלמיד:|שם:|מס\' זהות:.*|ת\.ז:.*)', '', text)
-    text = re.sub(r'[\d\-\.]', '', text)
-    return text.strip()
-
-def analyze_logic(grade_str, note):
-    reasons = []
+def check_grade_note_match(grade_str, note):
     try:
-        # חילוץ מספר הציון
+        # חילוץ הציון המספרי
         nums = re.findall(r'\d+', str(grade_str))
-        if nums:
-            grade_num = int(nums[0])
-            # חוק סתירה: ציון נמוך מ-55 עם מילה חיובית
-            if grade_num < 55:
-                for word in POSITIVE_WORDS:
-                    if word in str(note):
-                        reasons.append(f"❓ סתירה: ציון {grade_num} עם הערת '{word}'")
-                        break
+        if not nums: return None
+        grade_num = int(nums[0])
+        
+        # עיגול לקפיצות של 5 (ליתר ביטחון)
+        rounded_grade = 5 * round(grade_num / 5)
+        note_text = str(note).strip()
+
+        # 1. בדיקה אם הציון קיים בבנק
+        if rounded_grade in GRADE_BANK:
+            allowed_for_this_grade = GRADE_BANK[rounded_grade]
+            # בדיקה אם ההערה מופיעה ברשימה המותרת לציון הזה
+            is_match = any(allowed in note_text or note_text in allowed for allowed in allowed_for_this_grade)
+            
+            if is_match:
+                return None # הכל תקין
+            
+            # 2. אם לא נמצאה התאמה, נבדוק אם זו הערה של ציון אחר (סתירה)
+            for other_grade, other_notes in GRADE_BANK.items():
+                if any(n in note_text for n in other_notes):
+                    if other_grade > rounded_grade + 10:
+                        return f"❌ סתירה חמורה: ציון {grade_num} עם הערה ששייכת לציון {other_grade}"
+                    if other_grade < rounded_grade - 10:
+                        return f"⚠️ חוסר התאמה: ציון {grade_num} עם הערה שמתאימה לציון נמוך ({other_grade})"
+            
+            return "📝 הערה חופשית (לא מהבנק המוגדר)"
     except:
         pass
-    return reasons
+    return None
 
-uploaded_file = st.file_uploader("העלי קובץ תעודה", type=['docx'])
+uploaded_file = st.file_uploader("העלי קובץ תעודה (Word)", type=['docx'])
 
 if uploaded_file:
     doc = Document(uploaded_file)
     all_data = []
     student_name = "לא נמצא שם"
     
-    # 1. חיפוש השם בכל המסמך
-    for p in doc.paragraphs:
-        if "שם התלמיד" in p.text or "לכבוד" in p.text:
-            student_name = clean_student_name(p.text)
-            break
-    if student_name == "לא נמצא שם":
-        # ניסיון חיפוש בטבלה הראשונה (לפעמים השם שם)
-        for table in doc.tables[:1]:
-            for row in table.rows:
-                for cell in row.cells:
-                    if "שם" in cell.text:
-                        student_name = clean_student_name(cell.text)
-                        break
+    # חיפוש שם יסודי בכל פינה במסמך
+    search_areas = []
+    for p in doc.paragraphs: search_areas.append(p.text)
+    for s in doc.sections:
+        for p in s.header.paragraphs: search_areas.append(p.text)
+    for t in doc.tables:
+        for r in t.rows:
+            for c in r.cells: search_areas.append(c.text)
 
-    # 2. סריקת טבלאות ציונים
+    for text in search_areas:
+        if "שם התלמיד" in text or "לכבוד" in text:
+            match = re.search(r"(שם התלמיד/ה?|לכבוד)\s*[:/-]?\s*([א-ת\s]+)", text)
+            if match:
+                student_name = match.group(2).split("מס'")[0].split("ת.ז")[0].strip()
+                break
+
     for table in doc.tables:
         if len(table.rows) < 2: continue
+        headers = [c.text.strip() for c in table.rows[0].cells]
+        col_grade = next((i for i, h in enumerate(headers) if "ציון" in h), -1)
+        col_note = next((i for i, h in enumerate(headers) if "הערכה" in h or "מילולית" in h), -1)
+        col_sub = next((i for i, h in enumerate(headers) if "מקצוע" in h), 0)
         
-        # זיהוי עמודות בצורה גמישה
-        header_cells = [c.text.strip() for c in table.rows[0].cells]
-        
-        col_grade, col_note, col_sub = -1, -1, 0
-        
-        for i, h in enumerate(header_cells):
-            if "ציון" in h: col_grade = i
-            if "הערכה" in h or "מילולית" in h: col_note = i
-            if "מקצוע" in h: col_sub = i
-            
-        # אם לא מצאנו עמודות קריטיות, נדלג על הטבלה הזו בלי לקרוס
-        if col_grade == -1 or col_note == -1:
-            continue
+        if col_grade == -1 or col_note == -1: continue
 
         for row in table.rows[1:]:
             cells = [c.text.strip() for c in row.cells]
             if len(cells) > max(col_grade, col_note):
-                sub = cells[col_sub]
-                grade = cells[col_grade]
-                note = cells[col_note]
-                
+                sub, grade, note = cells[col_sub], cells[col_grade], cells[col_note]
                 if not grade and not note: continue
                 
-                logic_errors = analyze_logic(grade, note)
+                error_msg = check_grade_note_match(grade, note)
                 all_data.append({
                     "תלמיד": student_name,
                     "מקצוע": sub,
                     "ציון": grade,
                     "הערכה מילולית": note,
-                    "סטטוס": "❌ חריגה" if logic_errors else "✅ תקין",
-                    "פירוט": " | ".join(logic_errors) if logic_errors else ""
+                    "סטטוס": "✅ תקין" if not error_msg else "❌ חריגה",
+                    "פירוט": error_msg if error_msg else "התאמה מושלמת לבנק"
                 })
 
     if all_data:
         df = pd.DataFrame(all_data)
-        st.subheader(f"בדיקה עבור: {student_name}")
-        
-        def highlight_errors(row):
-            return ['background-color: #ffcccc' if row['סטטוס'] == "❌ חריגה" else '' for _ in row]
-        
-        st.table(df.style.apply(highlight_errors, axis=1))
+        st.subheader(f"דו\"ח בדיקה: {student_name}")
+        st.table(df.style.apply(lambda r: ['background-color: #ffcccc' if "❌" in str(r['סטטוס']) else '' for _ in r], axis=1))
     else:
-        st.warning("לא נמצאה טבלת ציונים מתאימה. ודאי שיש עמודה שכתוב בה 'ציון' ועמודה שכתוב בה 'הערכה מילולית'.")
+        st.error("לא נמצאו נתונים. ודאי שהטבלה מכילה עמודות 'ציון' ו-'הערכה מילולית'.")
