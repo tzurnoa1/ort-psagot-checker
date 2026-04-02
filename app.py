@@ -7,67 +7,72 @@ import re
 st.set_page_config(page_title="בודק תעודות - אורט פסגות", page_icon="🍎", layout="wide")
 st.markdown("""<style>.main { text-align: right; direction: rtl; }</style>""", unsafe_allow_html=True)
 
-st.title("🍎 בדיקה חכמה לפי ציון מדויק (40-100)")
+st.title("🍎 בודק תעודות - בנק משפטים מעודכן (40-45)")
 
-# --- בנק ההערות המלא לפי ציונים (עדכני כאן את המשפטים מהאקסל שלך) ---
-# המפתח הוא הציון, והערך הוא רשימת המשפטים המותרים לאותו ציון
+# --- רשימת המשפטים המשותפת לציון 40 ו-45 ---
+LOW_GRADE_SENTENCES = [
+    "עליך לגלות יותר מוטיבציה ואחריות ללמידה.",
+    "עליך לגלות אחריות על למידתך, להגיע בזמן לשיעורים ולבצע משימות באופן עקבי.",
+    "חוסר ההשתתפות ביום השדה פגע בצייונך.",
+    "מעורבות בשיעורים, הגשת כל המטלות והשקעת מאמצים לימודיים יקדמו אותך וישפרו את הבנתך בחומר הנלמד.",
+    "ציונך נפגע עקב היעדרויותיך הרבות.",
+    "היעדרויותיך הרבות פגעו בתפקודך ובהישגיך.",
+    "לא שיתפת פעולה ולא גייסת כוחות ללמידה.",
+    "עקביות בלמידה והכנת כל המשימות היו מובילות להישגים גבוהים יותר.",
+    "למידה עקבית, השקעת מאמצים והתמקדות בחומר הלימוד ישפרו את ידיעותייך ויקדמו אותך להישגים טובים במקצוע."
+]
+
+# --- בנק ההערות המלא ---
 GRADE_BANK = {
-    40: ["עליך לגלות יותר מוטיבציה ואחריות ללמידה.","עליך לגלות אחריות על למידתך, להגיע בזמן לשיעורים ולבצע משימות באופן עקבי.","חוסר ההשתתפות ביום השדה פגע בצייונך.","מעורבות בשיעורים, הגשת כל המטלות והשקעת מאמצים לימודיים יקדמו אותך וישפרו את הבנתך בחומר הנלמד.","ציונך נפגע עקב היעדרויותיך הרבות.","היעדרויותיך הרבות פגעו בתפקודך ובהישגיך.","לא שיתפת פעולה ולא גייסת כוחות ללמידה.","עקביות בלמידה והכנת כל המשימות היו מובילות להישגים גבוהים יותר.","למידה עקבית, השקעת מאמצים והתמקדות בחומר הלימוד ישפרו את ידיעותייך ויקדמו אותך להישגים טובים במקצוע."],
-    45: ["עליך לגלות יותר מוטיבציה ואחריות ללמידה.","עליך לגלות אחריות על למידתך, להגיע בזמן לשיעורים ולבצע משימות באופן עקבי.","חוסר ההשתתפות ביום השדה פגע בצייונך.","מעורבות בשיעורים, הגשת כל המטלות והשקעת מאמצים לימודיים יקדמו אותך וישפרו את הבנתך בחומר הנלמד.","ציונך נפגע עקב היעדרויותיך הרבות.","היעדרויותיך הרבות פגעו בתפקודך ובהישגיך.","לא שיתפת פעולה ולא גייסת כוחות ללמידה.","עקביות בלמידה והכנת כל המשימות היו מובילות להישגים גבוהים יותר.","למידה עקבית, השקעת מאמצים והתמקדות בחומר הלימוד ישפרו את ידיעותייך ויקדמו אותך להישגים טובים במקצוע."],
-    50: ["הנך מגלה מוטיבציה ורצון להתקדם בלימודים"],
-    55: ["ניכר כי הינך משקיעה מאמצים בלימודייך"],
-    60: ["הישגייך בתחום זה דורשים השקעה נוספת"],
-    65: ["הנך בנתיב הנכון, המשך התמדה תביא לשיפור"],
-    70: ["הישגייך טובים, מומלץ להעמיק בחומר"],
-    75: ["שקדת על עבודתך ברצינות, מתוך אחריות ובגרות"],
-    80: ["הנך משתתפת באופן פעיל ומגלה עניין"],
-    85: ["הישגייך טובים מאוד, יישר כוח"],
-    90: ["ראויה לשבח על הישגייך המצוינים", "כתיבתך רהוטה ועניינית"],
-    95: ["הישגייך מעולים, את מפגינה ידע רב"],
-    100: ["הצטיינות יתרה, כל הכבוד על ההשקעה והידע"]
+    40: LOW_GRADE_SENTENCES,
+    45: LOW_GRADE_SENTENCES,
+    # כאן תוכלי להמשיך להוסיף לשאר הציונים
+    95: [
+        "את ראויה לשבח על הישגייך המצוינים",
+        "יכולתך להתבטא בכתב ראויה לשבח"
+    ]
 }
 
-def check_grade_note_match(grade_str, note):
+def normalize_hebrew(text):
+    """מנקה הטיות מגדריות בסיסיות להשוואה חכמה"""
+    if not text: return ""
+    text = str(text).strip()
+    # החלפת סיומות נפוצות בנקבה לצורה בסיסית
+    text = text.replace("ייך", "ך").replace("יך", "ך")
+    text = text.replace("הינך", "הנך")
+    text = text.replace("עליך", "עלך").replace("עלייך", "עלך")
+    text = text.replace("שייך", "שך")
+    return text
+
+def check_grade_match(grade_str, note):
     try:
-        # חילוץ הציון המספרי
         nums = re.findall(r'\d+', str(grade_str))
         if not nums: return None
         grade_num = int(nums[0])
-        
-        # עיגול לקפיצות של 5 (ליתר ביטחון)
         rounded_grade = 5 * round(grade_num / 5)
-        note_text = str(note).strip()
+        
+        note_norm = normalize_hebrew(note)
 
-        # 1. בדיקה אם הציון קיים בבנק
         if rounded_grade in GRADE_BANK:
-            allowed_for_this_grade = GRADE_BANK[rounded_grade]
-            # בדיקה אם ההערה מופיעה ברשימה המותרת לציון הזה
-            is_match = any(allowed in note_text or note_text in allowed for allowed in allowed_for_this_grade)
+            # בדיקה אם המשפט קיים בבנק של הציון הנוכחי
+            for allowed in GRADE_BANK[rounded_grade]:
+                if normalize_hebrew(allowed) in note_norm or note_norm in normalize_hebrew(allowed):
+                    return None # תקין
             
-            if is_match:
-                return None # הכל תקין
+            # בדיקה אם המשפט שייך לציון גבוה משמעותית (סתירה)
+            for other_grade, notes in GRADE_BANK.items():
+                for n in notes:
+                    if normalize_hebrew(n) in note_norm:
+                        if other_grade > rounded_grade + 10:
+                            return f"❌ סתירה: ציון {grade_num} עם הערה שמתאימה לציון {other_grade}"
             
-            # 2. אם לא נמצאה התאמה, נבדוק אם זו הערה של ציון אחר (סתירה)
-            for other_grade, other_notes in GRADE_BANK.items():
-                if any(n in note_text for n in other_notes):
-                    if other_grade > rounded_grade + 10:
-                        return f"❌ סתירה חמורה: ציון {grade_num} עם הערה ששייכת לציון {other_grade}"
-                    if other_grade < rounded_grade - 10:
-                        return f"⚠️ חוסר התאמה: ציון {grade_num} עם הערה שמתאימה לציון נמוך ({other_grade})"
-            
-            return "📝 הערה חופשית (לא מהבנק המוגדר)"
+            return "📝 הערה חופשית (לא מהבנק המוגדר לציון זה)"
     except:
         pass
     return None
 
-uploaded_file = st.file_uploader("העלי קובץ תעודה (Word)", type=['docx'])
-
-if uploaded_file:
-    doc = Document(uploaded_file)
-    all_data = []
-    student_name = "לא נמצא שם"
-    
-    # חיפוש שם יסודי בכל פינה במסמך
+def find_student_name(doc):
+    # חיפוש "רדאר" מקיף לשם התלמיד
     search_areas = []
     for p in doc.paragraphs: search_areas.append(p.text)
     for s in doc.sections:
@@ -75,14 +80,24 @@ if uploaded_file:
     for t in doc.tables:
         for r in t.rows:
             for c in r.cells: search_areas.append(c.text)
-
+            
     for text in search_areas:
         if "שם התלמיד" in text or "לכבוד" in text:
+            # מחפש שם בעברית אחרי מילת מפתח
             match = re.search(r"(שם התלמיד/ה?|לכבוד)\s*[:/-]?\s*([א-ת\s]+)", text)
             if match:
-                student_name = match.group(2).split("מס'")[0].split("ת.ז")[0].strip()
-                break
+                name = match.group(2).split("מס'")[0].split("ת.ז")[0].strip()
+                if len(name.split()) >= 2: # מוודא שיש לפחות שם פרטי ומשפחה
+                    return name
+    return "לא נמצא שם"
 
+uploaded_file = st.file_uploader("העלי קובץ תעודה (Word)", type=['docx'])
+
+if uploaded_file:
+    doc = Document(uploaded_file)
+    student_name = find_student_name(doc)
+    
+    all_results = []
     for table in doc.tables:
         if len(table.rows) < 2: continue
         headers = [c.text.strip() for c in table.rows[0].cells]
@@ -96,21 +111,21 @@ if uploaded_file:
             cells = [c.text.strip() for c in row.cells]
             if len(cells) > max(col_grade, col_note):
                 sub, grade, note = cells[col_sub], cells[col_grade], cells[col_note]
-                if not grade and not note: continue
+                if not (grade or note): continue
                 
-                error_msg = check_grade_note_match(grade, note)
-                all_data.append({
+                error = check_grade_match(grade, note)
+                all_results.append({
                     "תלמיד": student_name,
                     "מקצוע": sub,
                     "ציון": grade,
                     "הערכה מילולית": note,
-                    "סטטוס": "✅ תקין" if not error_msg else "❌ חריגה",
-                    "פירוט": error_msg if error_msg else "התאמה מושלמת לבנק"
+                    "סטטוס": "✅ תקין" if not error else "❌ חריגה",
+                    "פירוט": error if error else "התאמה לבנק המאושר"
                 })
 
-    if all_data:
-        df = pd.DataFrame(all_data)
-        st.subheader(f"דו\"ח בדיקה: {student_name}")
+    if all_results:
+        df = pd.DataFrame(all_results)
+        st.subheader(f"דו\"ח בדיקה עבור: {student_name}")
         st.table(df.style.apply(lambda r: ['background-color: #ffcccc' if "❌" in str(r['סטטוס']) else '' for _ in r], axis=1))
     else:
-        st.error("לא נמצאו נתונים. ודאי שהטבלה מכילה עמודות 'ציון' ו-'הערכה מילולית'.")
+        st.error("לא נמצאו נתונים תקינים לסריקה.")
