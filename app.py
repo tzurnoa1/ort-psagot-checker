@@ -48,16 +48,30 @@ if pdf_file:
             tables = page.extract_tables()
             for table in tables:
                 for row in table:
-                    row = [c for c in row if c]
+                    # מנקה תאים ריקים
+                    row = [str(c).strip() for c in row if c]
                     if len(row) < 2: continue
+                    
                     g_val, n_val = None, None
+                    potential_notes = []
+
                     for cell in row:
-                        digits = re.findall(r'\d+', str(cell))
-                        if digits and not n_val: g_val = int(digits[0])
-                        elif len(str(cell)) > 10: n_val = str(cell).strip()
+                        # מחפש את הציון (מספר)
+                        digits = re.findall(r'\d+', cell)
+                        if digits and not g_val:
+                            g_val = int(digits[0])
+                        # מחפש טקסט ארוך (הערה) - לפחות 15 תווים
+                        elif len(cell) > 15:
+                            potential_notes.append(cell)
+                    
+                    # אם מצאנו כמה טקסטים, ניקח את הארוך ביותר (הוא בטוח ההערה ולא המקצוע)
+                    if potential_notes:
+                        n_val = max(potential_notes, key=len)
+
                     if g_val and n_val:
                         if g_val not in active_bank: active_bank[g_val] = []
-                        if n_val not in active_bank[g_val]: active_bank[g_val].append(n_val)
+                        if n_val not in active_bank[g_val]: 
+                            active_bank[g_val].append(n_val)
 
 # --- 3. סריקת התעודות ---
 uploaded_file = st.file_uploader("העלי קובץ תעודות (Word)", type=['docx'])
