@@ -93,19 +93,40 @@ if uploaded_file:
             from docx.table import Table
             table = Table(child, doc)
             if len(table.rows) < 2: continue
+            
+            # זיהוי אינדקסים של עמודות לפי כותרות
             headers = [c.text.strip() for c in table.rows[0].cells]
             col_grade = next((idx for idx, h in enumerate(headers) if "ציון" in h), -1)
-            col_note = next((idx for idx, h in enumerate(headers) if "הערכה" in h or "מילולית" in h), -1)
+            # אנחנו מחפשים עמודה שכתוב בה "הערכה" או "מילולית"
+            col_note_index = next((idx for idx, h in enumerate(headers) if "הערכה" in h or "מילולית" in h), -1)
             col_sub = next((idx for idx, h in enumerate(headers) if "מקצוע" in h), 0)
 
-            if col_grade != -1 and col_note != -1:
+            if col_grade != -1:
                 for row in table.rows[1:]:
                     cells = [c.text.strip() for c in row.cells]
-                    if len(cells) > max(col_grade, col_note):
-                        sub, grade_str, note = cells[col_sub], cells[col_grade], cells[col_note]
+                    if len(cells) > col_grade:
+                        # לוגיקת שליפה חכמה:
+                        grade_str = cells[col_grade]
+                        
+                        # אם מצאנו עמודת הערכה לפי כותרת - ניקח אותה. 
+                        # אם לא, נחפש בתא אחר שהוא לא המקצוע ולא הציון והוא הכי ארוך.
+                        potential_note = ""
+                        if col_note_index != -1 and col_note_index < len(cells):
+                            potential_note = cells[col_note_index]
+                        else:
+                            # לוקח את הטקסט הכי ארוך בשורה שאינו הציון
+                            text_cells = [c for i, c in enumerate(cells) if i != col_grade and len(c) > 2]
+                            if text_cells:
+                                potential_note = max(text_cells, key=len)
+                        
+                        sub = cells[col_sub] if col_sub < len(cells) else "לא ידוע"
+                        note = potential_note
+                        
                         if not (grade_str or note): continue
                         
-                        grade_num = int(re.findall(r'\d+', str(grade_str))[0]) if re.findall(r'\d+', str(grade_str)) else 0
+                        # המשך הבדיקה מול הבנק...
+                        grade_num_match = re.findall(r'\d+', str(grade_str))
+                        grade_num = int(grade_num_match[0]) if grade_num_match else 0
                         error = None
                         found_count = 0
                         
@@ -114,18 +135,22 @@ if uploaded_file:
                             valid_options = [normalize_hebrew(opt) for opt in active_bank[grade_num]]
                             
                             remaining = note_norm
-                            # לוגיקה שמזהה גם אם המורה השתמש ב-2 הערות מהבנק
                             for opt in sorted(valid_options, key=len, reverse=True):
                                 if opt in remaining:
                                     remaining = remaining.replace(opt, "").strip()
                                     found_count += 1
                             
                             remaining_clean = re.sub(r'[.\s,-]+', '', remaining)
-                            if found_count == 0: error = "❌ הערה לא נמצאה בבנק"
-                            elif len(remaining_clean) > 3: error = f"⚠️ שילוב טקסט חופשי: {remaining}"
+                            if found_count == 0: 
+                                error = "❌ הערה לא נמצאה בבנק"
+                            elif len(remaining_clean) > 3: 
+                                error = f"⚠️ שילוב טקסט חופשי: {remaining}"
                         
                         all_results.append({
-                            "תלמיד/ה": current_student, "מקצוע": sub, "ציון": grade_str,
+                            "תלמיד/ה": current_student,
+                            "מקצוע": sub,
+                            "ציון": grade_str,
+                            "הערכה בתעודה": note, # כאן תראי מה הוא שלף
                             "סטטוס": "✅ תקין" if not error else "❌ בדיקה",
                             "פירוט": error if error else f"תקין (זוהו {found_count} משפטים)"
                         })
